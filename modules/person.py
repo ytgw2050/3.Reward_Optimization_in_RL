@@ -1,131 +1,137 @@
 import random
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import math
-import networkx as nx
 
+from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.models import Model
 
+from keras.optimizers import Adam
 
-
-
-class Person:
-    def __init__(self, person_id , total_capital, holding_stock_num, env):
-        self.person_id = person_id
-        self.name = 'node'
-        self.color = 'red'
-        self.size = 500
-
-        self.total_capital = total_capital
-        self.investable_capital = total_capital
-        self.holding_stock_num = holding_stock_num
-        self.env = env
-        # self.agent = DDPGAgent(env,num_actions=3, input_window_size=10)
-        
-        self.input_nodes = []
-        self.output_nodes = []
-        
-        self.access = 0
-        self.denied = 0
-        self.alpha  = 1
+class DQN:
+    def __init__(self, person_id,gamma=0.99, epsilon=0.1, batch_size=64, model_type = None):
+        random.seed(None)
+        np.random.seed(None)
+        if model_type == 'lite':
+            self.model = self.build_dqn_lite()
+        elif model_type == 'hard':
+            self.model = self.build_dqn_hard()
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.batch_size = batch_size
+        self.memory = []  
+        self.model_type = model_type
         
         
-        self.criterion = [0 , 0] # 기준치 변경
-        self.reputation = 0.5 # 신뢰도
-        self.total_node_num = len(self.input_nodes) + len(self.output_nodes) # 총 연결수
-        self.total_node_rate = 0 # 총 생산수 받은것분의 준것
+    def build_dqn_lite(self):
+        input_layer = Input(shape=(37,))
+
+        hidden_layer = Dense(32, activation='relu',kernel_initializer='random_uniform', bias_initializer='random_uniform')(input_layer)
+
+
+        output_layer_1 = Dense(3, activation='linear',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+        output_layer_2 = Dense(10, activation='linear',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+        output_layer_3 = Dense(9, activation='linear',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer) # For [0,1,2]
+
+        model = Model(inputs=input_layer, outputs = [output_layer_1,output_layer_2,output_layer_3])
+        model.compile(loss='mse', optimizer=Adam())
+        return model
         
-        self.try_experience = 1
-        self.experience_data = []
+    def build_dqn_hard(self):
+
+        input_layer = Input(shape=(37,))
+
+        hidden_layer = Dense(256, activation='relu',kernel_initializer='random_uniform', bias_initializer='random_uniform')(input_layer)
+        hidden_layer = Dense(128, activation='relu',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+        hidden_layer = Dense(32, activation='relu',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+        hidden_layer = Dense(12, activation='relu',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+
+
+        output_layer_1 = Dense(3, activation='linear',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+        output_layer_2 = Dense(10, activation='linear',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer)
+        output_layer_3 = Dense(9, activation='linear',kernel_initializer='random_uniform', bias_initializer='random_uniform')(hidden_layer) 
+
+        model = Model(inputs=input_layer, outputs = [output_layer_1,output_layer_2,output_layer_3])
+        model.compile(loss='mse', optimizer=Adam())
+        return model
+
     
-    
-
-         
-    def get_reputation(self): # 사회에서 인정받은 정도 신뢰성
-        return self.reputation
-        
-        
-    def update_reputation(self, success,another):
-        if success:
-            self.access += 1# * another.total_capitals
+    def select_action(self, state):
+        if np.random.rand() < self.epsilon:
+            return [self.env.action_space[i].sample() for i in range(2)]
         else:
-            self.denied += 1 #* another.total_capitals # 신뢰도 가진 자본으로 측정 단순히 성공 실패가 아닌 어떤사람한테 성공했는지 어떤사람한테 실패했는지 파악 다른 반대값 들어가야함 별거없는 애한테 무시당했으면 타격이 더큼 
+            q_values = self.model.predict(state)
+            return [np.argmax(q_values[i]) for i in range(2)]
+      
+
+    def train(self, state, action, next_state, reward, done):
+        self.memory.append((state, action, next_state, reward, done))
+        
+        if len(self.memory) < self.batch_size:
+            return
+        
+        batch = random.sample(self.memory, self.batch_size)
+        for state, action, next_state, reward, done in batch:
+            q_update = reward
+            if not done:
+                q_update = (reward + self.gamma * np.amax(self.model.predict(next_state)[0]))
             
-        
-        if (self.access + self.denied) == 0:
-            self.reputation = 0
-        else:
-            self.reputation = self.access / (self.access + self.denied)
-        
-        
-    def make_random_criterion(self):# 각자의 기준 생성
-        x1 = random.random()
-        x2 = random.random()
-        
-        min_ = min(x1,x2)
-        max_ = max(x1,x2)
-        
-        self.criterion = [min_ , max_]
-        
-        return min_ , max_
+            q_values = self.model.predict(state)
+            q_values[action] = q_update
+
+            self.model.fit(state, q_values, verbose=0)
 
 
+class Person: # 개인의 주체
+    def __init__(self, person_id , total_capital, holding_stock_num, env,model_type = None):
+        
+        # 네트워크속에서의 노드 정보
+        self.person_id = person_id # 개인의 번호
+        
+        
+        self.try_experience = 1     # 개인의 현재 경험
+        self.experience_data = []   # 개인의 경험 데이터
 
-    def make_real_invest(self): #모델 주문
-        state = self.env.get_past_prices(self.agent.input_window_size)
-        action, order_num, order_price_ratio = self.agent.choose_action(state)
-        order_type = ['buy', 'sell', 'hold'][action]
-        current_price = self.env.get_price()
-        order_price = current_price + current_price * order_price_ratio
-        getattr(self, order_type)(order_num, order_price, invest_able_for_market=None)
+        
+        
+        # 주식시장내에서의 정보
+        self.total_capital = total_capital       # 개인의 자본
+        self.investable_capital = total_capital    # 개인의 투자가능 자본
+        self.holding_stock_num = holding_stock_num  # 개인의 holding 수
+        self.env = env                              # 환경
+        if model_type == 'lite':
+            self.agent = DQN(env,person_id,model_type = 'lite') # 에이전트 정의
+        elif model_type == 'hard':
+            self.agent = DQN(env,person_id,model_type = 'hard') # 에이전트 정의 
 
-        reward = self.total_capital 
-
-        next_state = self.env.get_past_prices(self.agent.input_window_size)
-        action_target, _, _ = self.agent.choose_action(next_state)
-        action_target = tf.keras.utils.to_categorical(action_target, num_classes=self.agent.num_actions)
-        target = reward + self.agent.discount_factor * self.agent.critic.predict([np.expand_dims(next_state, axis=0), np.array([action_target]), np.array([order_num]), np.array([order_price_ratio])],verbose = 0)
-        self.agent.critic.fit([np.expand_dims(state, axis=0), np.array([action_target]), np.array([order_num]), np.array([order_price_ratio])], np.array([target]))#, verbose=0
-        
-        
-    def make_random_invest(self): # 랜덤 주문
-        order_type = random.choice(['buy', 'sell', 'hold'])
-        order_num = random.randint(1, 10)
-        order_price = self.env.get_price() + max(random.randint(-10, 10),-self.env.get_price()+1) # 값이 0보다작아져서 추천해주면 변경최소선
-        getattr(self,order_type)(order_num, order_price, invest_able_for_market=None)
-        
-        
-    def can_invest(self, order_num, order_price, order_type): # 거래 가능한지
+            
+    def can_invest(self, order_num, order_price, order_type): # 거래 가능한지 파악
         if order_type == 'buy':     
             return (self.investable_capital // order_price) >= order_num
         elif order_type == 'sell':
             return (self.holding_stock_num) >= order_num
         else:
-            return False
-
+            return False #hold 일때
         
-    def buy_first(self, order_num): # 초기 주식 판매
-        self.investable_capital -= order_num * self.env.get_price()
+        return True
+
+    def buy_first(self, order_num): # 초기 주식 구매
+        self.investable_capital -= order_num * self.env.get_price() # 거래가능자본
         self.holding_stock_num += order_num
-        self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price()
+        self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price() # 총보유자본
 
-
-    def buy(self, order_num, order_price, invest_able_for_market=None):# None 값 거래주문만 하면 /Ture 이면 실제 자본 업데이트 거래 성사 / False 거래 성사 실패
+    def buy(self, order_num, order_price, invest_able_for_market=None):# None 값 : 거래주문 거래소에 넣을떄 /Ture : 실제 거래소에서 거래 성사되었을때 / False 실제 거래소에서 거래 실패했을때
         if invest_able_for_market is None:
             if self.can_invest(order_num, order_price, 'buy'): # invest_able_for_market 적으면 주문성사된것대로 자본업데이트 하기 
-                self.env.add_invest(self.person_id, 'buy', order_num, order_price)
-            else:# 거래 성사 실패시
-                self.env.add_invest(self.person_id, 'hold', order_num, order_price)
-        else: # invest_able_for_market 안적고 buy 만 하면 주문 들어가도록 하기 
-            if invest_able_for_market:
+                self.env.add_invest(self.person_id, 'buy', order_num, order_price) #거래소에 거래 넣어보기 
+            else:# 개인자본 문제로 거래 성사 실패시
+                self.env.add_invest(self.person_id, 'hold', order_num, order_price)#거래소에 거래 넣기전에 자본 문제로 실패
+        else: # 실제 거래소에서 거래 성립했을떄
+            if invest_able_for_market:#거래소에 거래 성공
                 self.investable_capital -= order_num * order_price
                 self.holding_stock_num += order_num
                 self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price()
-            else:
+            else:#거래소에 거래 실패
                 self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price()
-
-            
+    
     def sell(self, order_num, order_price, invest_able_for_market=None):
         if invest_able_for_market is None:
             if self.can_invest(order_num, order_price, 'sell'):
@@ -139,8 +145,7 @@ class Person:
                 self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price()
             else:
                 self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price()
-
-            
+   
     def hold(self, order_num, order_price, invest_able_for_market=None):
         if invest_able_for_market is None:
             self.env.add_invest(self.person_id, 'hold', order_num, order_price)
@@ -149,4 +154,83 @@ class Person:
             self.investable_capital += order_num * order_price
             self.holding_stock_num -= order_num
             self.total_capital = self.investable_capital + self.holding_stock_num * self.env.get_price()
+            
+            
+            
+    def sum_1(self,probabilities):
+        abs_probabilities = [abs(p) for p in probabilities]
+        total = sum(abs_probabilities)
+        normalized_probabilities = [abs(p)/total for p in abs_probabilities]
+        
+        return normalized_probabilities
+            
+            
+    def real_invest(self,state): #모델 주문
+        Q_values = self.agent.model.predict(state, verbose=0)
 
+        action_1 = np.random.choice([0,1,2], p=self.sum_1(Q_values[0][0]))
+        action_2 = np.random.choice([0,1,2,3,4,5,6,7,8,9], p=self.sum_1(Q_values[1][0]))
+        action_3 = np.random.choice([0,1,2,3,4,5,6,7,8], p=self.sum_1(Q_values[2][0]))
+    
+        order_type = ['buy','sell','hold'][action_1]
+        order_num = [1,2,3,4,5,6,7,8,9,10][action_2]
+        order_price = self.env.stock_price + [-4,-3,-2,-1,0,1,2,3,4][action_3]
+
+        if order_type == 'hold':
+            order_num = 0
+            order_price = 0
+
+
+        getattr(self,order_type)(order_num, order_price, invest_able_for_market=None)
+        return [action_1,action_2,action_3]
+    
+
+    def real_agent_invest(self,state): #모델 주문
+        Q_values = self.agent.model.predict(state, verbose=0)
+        action_1 = np.argmax(Q_values[0])
+        action_2 = np.argmax(Q_values[1])
+        action_3 = np.argmax(Q_values[2])
+
+        order_type = ['buy','sell','hold'][action_1]
+        order_num = [1,2,3,4,5,6,7,8,9,10][action_2]
+        order_price = self.env.stock_price + [-4,-3,-2,-1,0,1,2,3,4][action_3]
+        
+        order_type = 'sell'
+        order_num = 10
+        order_price = self.env.stock_price 
+
+#         if order_type == 'hold':
+#             order_num = 0
+#             order_price = 0
+                        
+
+        getattr(self,order_type)(order_num, order_price, invest_able_for_market=None)
+        return [action_1,action_2,action_3]
+
+    def random_invest(self): # 랜덤 주문
+        Q_values = self.agent.model.predict(state, verbose=0)
+        action_1 = np.random.choice([0,1,2])
+        action_2 = np.random.choice([0,1,2,3,4,5,6,7,8,9])
+        action_3 = np.random.choice([0,1,2,3,4,5,6,7,8])
+        
+        order_type = ['buy', 'sell', 'hold'][action_1]
+        order_num = [1,2,3,4,5,6,7,8,9,10][action_2]
+        order_price = self.env.get_price() + [-4,-3,-2,-1,0,1,2,3,4][action_3] # 값이 0보다작아져서 추천해주면 변경 최소선
+        getattr(self,order_type)(order_num, order_price, invest_able_for_market=None) # 거래소에 거래 넣기 
+        return Q_values,[action_1,action_2,action_3]
+        
+    def reset(self,total_capital):
+        # 네트워크속에서의 노드 정보
+#         self.person_id = person_id # 개인의 번호
+        
+        
+        self.try_experience = 1     # 개인의 현재 경험
+        self.experience_data = []   # 개인의 경험 데이터
+
+
+        
+        # 주식시장내에서의 정보
+        self.total_capital = total_capital       # 개인의 자본
+        self.investable_capital = total_capital    # 개인의 투자가능 자본
+        self.holding_stock_num = 0  # 개인의 holding 수
+        
