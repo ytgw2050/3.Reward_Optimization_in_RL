@@ -1,5 +1,5 @@
 # 3.Reward_Optimization_in_RL
-## Our study introduces a deep learning-based reward prediction model that efficiently combines the strengths of Sparse and Dense rewards, outperforming both in a stock trading simulation with consistent and superior stability.
+### Our study introduces a deep learning-based reward prediction model that efficiently combines the strengths of Sparse and Dense rewards, outperforming both in a stock trading simulation with consistent and superior stability.
 
 강화학습의 핵심 구성요소 중 하나인 보상 함수의 설계는 에이전트의 학습 성능과 일반화 능력에 큰 영향을 미친다.  
 지금까지 이루어진 연구에서는 Sparse 와 Dense 보상 함수의 장단점을 통합하여 에이전트의 성능을 향상시키려는 다양한 방법론이 제시되었지만, 
